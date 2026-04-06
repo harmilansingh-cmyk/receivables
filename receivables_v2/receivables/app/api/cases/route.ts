@@ -3,50 +3,43 @@ import { google } from 'googleapis'
 
 function getSheets() {
   const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY!)
-  const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ['https://www.googleapis.com/auth/spreadsheets'] })
+  const auth  = new google.auth.GoogleAuth({ credentials: creds, scopes: ['https://www.googleapis.com/auth/spreadsheets'] })
   return google.sheets({ version: 'v4', auth })
 }
 
 const SHEET_ID = process.env.GOOGLE_SHEET_ID!
 
-interface Case {
-  invoice_no: string
-  client_name: string
-  bank: string
-  month: string
-  bank_ref: string
-  disbursal_amount: number
-  bank_confirmed_yn: string
-  rejection_reason: string
-  td_status: string
-  td_source: string
-  mis_source: string
-  created_at: string
-  updated_at: string
-  _row: number
-}
-
-function rowToCase(row: unknown[], rowIndex: number): Case {
-  const r = row as string[]
+function rowToCase(headers: string[], row: string[], rowIndex: number) {
+  const get    = (f: string) => { const i = headers.indexOf(f); return i >= 0 ? (row[i] || '') : '' }
+  const getNum = (f: string) => { const i = headers.indexOf(f); return i >= 0 ? (Number(row[i]) || 0) : 0 }
   return {
-    invoice_no:        r[0]  || '',
-    client_name:       r[1]  || '',
-    bank:              r[2]  || '',
-    month:             r[3]  || '',
-    bank_ref:          r[4]  || '',
-    disbursal_amount:  Number(r[5]) || 0,
-    bank_confirmed_yn: r[6]  || '',
-    rejection_reason:  r[7]  || '',
-    td_status:         r[8]  || '',
-    td_source:         r[9]  || '',
-    mis_source:        r[10] || '',
-    created_at:        r[11] || '',
-    updated_at:        r[12] || '',
+    invoice_no:            get('invoice_no'),
+    client_name:           get('client_name'),
+    bank_client_name:      get('bank_client_name'),
+    bank:                  get('bank'),
+    month:                 get('month'),
+    channel:               get('channel'),
+    finance_channel:       get('finance_channel'),
+    customer_segment:      get('customer_segment'),
+    disbursal_amount:      getNum('disbursal_amount'),
+    disbursal_amount_bank: getNum('disbursal_amount_bank'),
+    bank_confirmed_yn:     get('bank_confirmed_yn'),
+    commission_amount:     getNum('commission_amount'),
+    gross_income:          getNum('gross_income'),
+    include_in_invoice:    get('include_in_invoice'),
+    include_in_incentives: get('include_in_incentives'),
+    bank_ref:              get('bank_ref'),
+    rejection_reason:      get('rejection_reason'),
+    td_status:             get('td_status'),
+    td_source:             get('td_source'),
+    mis_source:            get('mis_source'),
+    recon_status:          get('recon_status'),
+    created_at:            get('created_at'),
+    updated_at:            get('updated_at'),
     _row: rowIndex,
   }
 }
 
-// GET /api/cases?invoice_no=PI-03483
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
@@ -55,65 +48,66 @@ export async function GET(req: NextRequest) {
     const month     = searchParams.get('month')
 
     const api = getSheets()
-    const res = await api.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: 'INVOICE_CASES!A2:M',
-    })
 
-    const rows = res.data.values ?? []
+    const [hdrRes, dataRes] = await Promise.all([
+      api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'INVOICE_CASES!1:1' }),
+      api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'INVOICE_CASES!A2:Z' }),
+    ])
+
+    const headers = (hdrRes.data.values?.[0] ?? []) as string[]
+    const rows    = dataRes.data.values ?? []
+
     let cases = rows
-      .map((row, i) => rowToCase(row, i + 2))
+      .map((row, i) => rowToCase(headers, row as string[], i + 2))
       .filter(c => c.client_name !== '')
 
     if (invoiceNo) cases = cases.filter(c => c.invoice_no === invoiceNo)
     if (bank)      cases = cases.filter(c => c.bank === bank)
     if (month)     cases = cases.filter(c => c.month === month)
 
-    // Summary stats
     const total      = cases.length
     const confirmed  = cases.filter(c => c.bank_confirmed_yn === 'Y').length
-    const tdPending  = cases.filter(c => c.td_status && c.td_status.toLowerCase().includes('pending')).length
+    const tdPending  = cases.filter(c => c.td_status?.toLowerCase().includes('pending')).length
     const disputed   = cases.filter(c => c.bank_confirmed_yn === 'N').length
+    const bankOnly   = cases.filter(c => c.recon_status === 'BANK_ONLY').length
+    const prypcoOnly = cases.filter(c => c.recon_status === 'PRYPCO_ONLY' || !c.recon_status).length
 
-    return NextResponse.json({ cases, summary: { total, confirmed, tdPending, disputed } })
+    return NextResponse.json({ cases, summary: { total, confirmed, tdPending, disputed, bankOnly, prypcoOnly } })
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 })
   }
 }
 
-// PATCH /api/cases — update bank_confirmed_yn or td_status on a case
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
     const { _row, ...fields } = body
-
     if (!_row) return NextResponse.json({ error: 'Missing _row' }, { status: 400 })
 
     const api = getSheets()
 
-    // Read current row
-    const res = await api.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: `INVOICE_CASES!A${_row}:M${_row}`,
+    const [hdrRes, rowRes] = await Promise.all([
+      api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'INVOICE_CASES!1:1' }),
+      api.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `INVOICE_CASES!A${_row}:Z${_row}` }),
+    ])
+
+    const headers = (hdrRes.data.values?.[0] ?? []) as string[]
+    const current = [...((rowRes.data.values?.[0] ?? []) as string[])]
+    while (current.length < headers.length) current.push('')
+
+    Object.entries(fields).forEach(([field, value]) => {
+      const i = headers.indexOf(field)
+      if (i >= 0) current[i] = String(value ?? '')
     })
-    const current = (res.data.values?.[0] ?? []) as string[]
-    const updated = rowToCase(current, _row)
 
-    // Merge fields
-    const merged = { ...updated, ...fields, updated_at: new Date().toISOString() }
-
-    const row = [
-      merged.invoice_no, merged.client_name, merged.bank, merged.month,
-      merged.bank_ref, merged.disbursal_amount, merged.bank_confirmed_yn,
-      merged.rejection_reason, merged.td_status, merged.td_source,
-      merged.mis_source, merged.created_at, merged.updated_at,
-    ]
+    const updIdx = headers.indexOf('updated_at')
+    if (updIdx >= 0) current[updIdx] = new Date().toISOString()
 
     await api.spreadsheets.values.update({
       spreadsheetId: SHEET_ID,
-      range: `INVOICE_CASES!A${_row}:M${_row}`,
+      range: `INVOICE_CASES!A${_row}:Z${_row}`,
       valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
+      requestBody: { values: [current] },
     })
 
     return NextResponse.json({ ok: true })
