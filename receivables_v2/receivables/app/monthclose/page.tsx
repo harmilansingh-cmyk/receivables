@@ -305,7 +305,7 @@ function CaseDetailPanel({ bank, month, cases, summary, onCaseUpdate }: {
 
   const filtered = cases.filter(c => {
   if (filter === 'confirmed')  return c.bank_confirmed_yn === 'Y'
-  if (filter === 'unmatched')  return c.recon_status === 'PRYPCO_ONLY'
+  if (filter === 'unmatched')  return c.recon_status === 'PRYPCO_ONLY' || c.recon_status === '' || !c.recon_status
   if (filter === 'bank_only')  return c.recon_status === 'BANK_ONLY'
   return true
 })
