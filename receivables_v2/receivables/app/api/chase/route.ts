@@ -54,7 +54,7 @@ Instructions:
 - Start with: Dear ${bankInfo.rm_name ? bankInfo.rm_name : 'Team'},`
 
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 500,
       messages: [{ role: 'user', content: prompt }],
     })
