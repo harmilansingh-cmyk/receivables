@@ -304,11 +304,11 @@ function CaseDetailPanel({ bank, month, cases, summary, onCaseUpdate }: {
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'unmatched' | 'bank_only'>('all')
 
   const filtered = cases.filter(c => {
-    if (filter === 'confirmed')  return c.bank_confirmed_yn === 'Y'
-    if (filter === 'unmatched')  return c.recon_status === 'PRYPCO_ONLY'
-    if (filter === 'bank_only')  return c.recon_status === 'BANK_ONLY'
-    return true
-  })
+  if (filter === 'confirmed')  return c.bank_confirmed_yn === 'Y'
+  if (filter === 'unmatched')  return c.recon_status === 'PRYPCO_ONLY'
+  if (filter === 'bank_only')  return c.recon_status === 'BANK_ONLY'
+  return true
+})
 
   const totalDisb  = cases.reduce((s, c) => s + (Number(c.disbursal_amount) || 0), 0)
   const confirmedDisb = cases.filter(c => c.bank_confirmed_yn === 'Y')
