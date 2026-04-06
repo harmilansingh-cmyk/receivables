@@ -42,6 +42,14 @@ const BANK_MAP: Record<string, string> = {
   'eib':'EIB','emirates islamic':'EIB',
 }
 
+function parseAED(val: unknown): number | string {
+  if (val == null || val === '') return ''
+  // Remove commas (e.g. "411,000" → "411000"), then parse
+  const clean = String(val).replace(/,/g, '').trim()
+  const n = parseFloat(clean)
+  return isNaN(n) ? '' : n
+}
+
 function normBank(name: string): string {
   const lower = name.toLowerCase().trim()
   for (const [key, val] of Object.entries(BANK_MAP)) {
@@ -186,12 +194,12 @@ export async function POST(req: NextRequest) {
       set('channel',               colMap.channel        >= 0 ? row[colMap.channel]        : '')
       set('finance_channel',       colMap.financeChannel >= 0 ? row[colMap.financeChannel] : '')
       set('customer_segment',      colMap.customerSegment>= 0 ? row[colMap.customerSegment]: '')
-      set('disbursal_amount',      colMap.disbAmt        >= 0 ? (parseFloat(String(row[colMap.disbAmt] || '0')) || '') : '')
+      set('disbursal_amount',      colMap.disbAmt        >= 0 ? parseAED(row[colMap.disbAmt]) : '')
       set('disbursal_amount_bank', colMap.disbAmtBank    >= 0 ? row[colMap.disbAmtBank]    : '')
       set('bank_confirmed_yn',     colMap.confirmedYN    >= 0 ? row[colMap.confirmedYN]    : '')
       set('bank_client_name',      colMap.clientNameBank >= 0 ? row[colMap.clientNameBank] : '')
-      set('commission_amount',     colMap.commsAmt       >= 0 ? (parseFloat(String(row[colMap.commsAmt]    || '0')) || '') : '')
-      set('gross_income',          colMap.grossIncome    >= 0 ? (parseFloat(String(row[colMap.grossIncome] || '0')) || '') : '')
+      set('commission_amount',     colMap.commsAmt       >= 0 ? parseAED(row[colMap.commsAmt]) : '')
+      set('gross_income',          colMap.grossIncome    >= 0 ? parseAED(row[colMap.grossIncome]) : '')
       set('include_in_invoice',    colMap.forFinance     >= 0 ? row[colMap.forFinance]     : '')
       set('include_in_incentives', colMap.forIncentives  >= 0 ? row[colMap.forIncentives]  : '')
       set('mis_source',            sheetId.substring(0, 20) + '_' + month)
