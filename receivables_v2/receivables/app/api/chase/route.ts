@@ -65,8 +65,9 @@ Instructions:
       .join('')
 
     const subject = `Payment Follow-up — PRYPCO Invoices | ${bank} | AED ${totalOS.toLocaleString()}`
-    const mailto = `mailto:${bankInfo.ap_email}?${bankInfo.cc_emails ? `cc=${encodeURIComponent(bankInfo.cc_emails)}&` : ''}subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(draft)}`
-
+    const primaryEmails = bankInfo.ap_email.split(',').map((e: string) => e.trim()).join(',')
+    const mailto = `mailto:${primaryEmails}?${bankInfo.cc_emails ? `cc=${encodeURIComponent(bankInfo.cc_emails)}&` : ''}subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(draft)}`
+    
     return NextResponse.json({
       draft,
       mailto,
