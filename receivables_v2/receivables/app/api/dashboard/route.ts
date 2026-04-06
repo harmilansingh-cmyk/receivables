@@ -15,8 +15,8 @@ export async function GET() {
 
     const thisMonth = new Date().toISOString().slice(0, 7)
     const collectedThisMonth = active
-      .filter(i => i.payment_date?.startsWith(thisMonth))
-      .reduce((s, i) => s + i.payment_amount, 0)
+  .filter(i => i.payment_date?.startsWith(thisMonth))
+  .reduce((s, i) => s + (Number(i.payment_amount) || 0), 0)
 
     const avgAgeing = outstanding.length
       ? Math.round(outstanding.reduce((s, i) => s + i.ageing_days, 0) / outstanding.length)
