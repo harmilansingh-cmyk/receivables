@@ -11,6 +11,7 @@ const NAV = [
   { href: '/collections', label: 'Collections',      icon: '📈' },
   { href: '/chase',       label: 'Chase Drafter',    icon: '✉️'  },
   { href: '/settings',    label: 'Banks & Settings', icon: '⚙️'  },
+  { href: '/monthclose', label: 'Month Close', icon: '📅' },
 ]
 
 export function Sidebar() {
