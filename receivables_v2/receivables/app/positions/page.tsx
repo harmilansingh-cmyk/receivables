@@ -58,7 +58,9 @@ export default function PositionBoardPage() {
       .then(data => { setPositions(Array.isArray(data) ? data : []); setLoading(false) })
   }, [])
 
-  const allBanks = Array.from(new Set(positions.map(p => p.bank))).sort()
+  const bankSet: Record<string, boolean> = {}
+  positions.forEach(p => { bankSet[p.bank] = true })
+  const allBanks = Object.keys(bankSet).sort()
   const posMap: Record<string, Position> = {}
   positions.forEach(p => { posMap[`${p.bank}|${p.month}`] = p })
 
