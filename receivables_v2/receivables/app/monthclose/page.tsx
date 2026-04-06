@@ -190,6 +190,14 @@ function MonthCloseInner() {
             month={month}
             cases={cases}
             summary={summaries.find(s => s.bank === selectedBank)}
+            onRefresh={() => {
+              loadMonth(month)
+              // Reload cases for this bank
+              setCasesLoading(true)
+              fetch(`/api/cases?bank=${selectedBank}&month=${month}`)
+                .then(r => r.json())
+                .then(d => { setCases(d.cases || []); setCasesLoading(false) })
+            }}
             onCaseUpdate={(row, field, value) => {
               fetch('/api/cases', {
                 method: 'PATCH',
@@ -294,21 +302,23 @@ export default function MonthClosePage() {
 }
 
 // ── Case Detail Panel ────────────────────────────────────────
-function CaseDetailPanel({ bank, month, cases, summary, onCaseUpdate }: {
+function CaseDetailPanel({ bank, month, cases, summary, onCaseUpdate, onRefresh }: {
   bank: string
   month: string
   cases: Case[]
   summary?: BankSummary
   onCaseUpdate: (row: number, field: string, value: string) => void
+  onRefresh?: () => void
 }) {
   const [filter, setFilter] = useState<'all' | 'confirmed' | 'unmatched' | 'bank_only'>('all')
+  const [showLinking, setShowLinking] = useState(false)
 
   const filtered = cases.filter(c => {
-  if (filter === 'confirmed')  return c.bank_confirmed_yn === 'Y'
-  if (filter === 'unmatched')  return c.recon_status === 'PRYPCO_ONLY' || c.recon_status === '' || !c.recon_status
-  if (filter === 'bank_only')  return c.recon_status === 'BANK_ONLY'
-  return true
-})
+    if (filter === 'confirmed')  return c.bank_confirmed_yn === 'Y'
+    if (filter === 'unmatched')  return c.recon_status === 'PRYPCO_ONLY'
+    if (filter === 'bank_only')  return c.recon_status === 'BANK_ONLY'
+    return true
+  })
 
   const totalDisb  = cases.reduce((s, c) => s + (Number(c.disbursal_amount) || 0), 0)
   const confirmedDisb = cases.filter(c => c.bank_confirmed_yn === 'Y')
@@ -362,6 +372,18 @@ function CaseDetailPanel({ bank, month, cases, summary, onCaseUpdate }: {
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Link Names button — shown when there are unmatched cases */}
+      {(summary?.prypcoOnly ?? 0) > 0 && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => setShowLinking(true)}
+            className="px-4 py-2 text-sm font-medium bg-amber-600 text-white rounded-xl hover:bg-amber-700"
+          >
+            🔗 Link {summary?.prypcoOnly} Unmatched Names
+          </button>
         </div>
       )}
 
@@ -474,6 +496,15 @@ function CaseDetailPanel({ bank, month, cases, summary, onCaseUpdate }: {
           )}
         </div>
       </div>
+      {/* Name Linking Modal */}
+      {showLinking && (
+        <NameLinkingPanel
+          bank={bank}
+          month={month}
+          onClose={() => setShowLinking(false)}
+          onLinked={() => { onRefresh?.() }}
+        />
+      )}
     </div>
   )
 }
@@ -504,5 +535,146 @@ function ReconStatusBadge({ status }: { status: string }) {
     <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${styles[status] || 'bg-slate-100 text-slate-400'}`}>
       {labels[status] || status || '—'}
     </span>
+  )
+}
+
+// ── Name Linking Modal ────────────────────────────────────────
+// Exported so it can be used from CaseDetailPanel
+export function NameLinkingPanel({ bank, month, onClose, onLinked }: {
+  bank: string
+  month: string
+  onClose: () => void
+  onLinked: () => void
+}) {
+  const [unmatched, setUnmatched] = useState<{
+    _row: number; client_name: string; bank: string; month: string; disbursal: number; channel: string
+  }[]>([])
+  const [bankNames, setBankNames] = useState<Record<number, string>>({})
+  const [saving, setSaving] = useState<Record<number, boolean>>({})
+  const [linked, setLinked] = useState<Record<number, boolean>>({})
+  const [loading, setLoading] = useState(true)
+  const [bankInput, setBankInput] = useState('')
+  const [selected, setSelected] = useState<number | null>(null)
+
+  useEffect(() => {
+    fetch(`/api/casematch?bank=${bank}&month=${month}`)
+      .then(r => r.json())
+      .then(d => { setUnmatched(d.unmatched || []); setLoading(false) })
+  }, [bank, month])
+
+  const linkCase = async (row: number, prypcoName: string) => {
+    const bankName = bankNames[row]?.trim()
+    if (!bankName) return
+    setSaving(s => ({ ...s, [row]: true }))
+    await fetch('/api/casematch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        _row: row,
+        bank_name: bankName,
+        bank,
+        prypco_name: prypcoName,
+        save_mapping: true,
+      }),
+    })
+    setSaving(s => ({ ...s, [row]: false }))
+    setLinked(l => ({ ...l, [row]: true }))
+    onLinked()
+  }
+
+  const stillUnmatched = unmatched.filter(c => !linked[c._row])
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+          <div>
+            <h2 className="font-bold text-slate-900">Manual Name Linking — {bank} · {month}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Type the bank&apos;s version of each client name. Saved links are remembered for future months.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-2xl">&times;</button>
+        </div>
+
+        {/* Progress */}
+        <div className="px-6 py-3 border-b border-slate-50 flex items-center gap-4 flex-shrink-0">
+          <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 rounded-full transition-all"
+              style={{ width: `${unmatched.length > 0 ? ((unmatched.length - stillUnmatched.length) / unmatched.length) * 100 : 0}%` }}
+            />
+          </div>
+          <span className="text-xs text-slate-500 flex-shrink-0">
+            {unmatched.length - stillUnmatched.length}/{unmatched.length} linked
+          </span>
+        </div>
+
+        {/* Case list */}
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+          {loading && <p className="text-sm text-slate-400 animate-pulse">Loading...</p>}
+          {!loading && stillUnmatched.length === 0 && (
+            <div className="text-center py-8">
+              <p className="text-emerald-600 font-medium">✅ All cases linked!</p>
+              <button onClick={onClose} className="mt-4 px-4 py-2 text-sm bg-slate-900 text-white rounded-xl">
+                Close
+              </button>
+            </div>
+          )}
+          {stillUnmatched.map(c => (
+            <div
+              key={c._row}
+              className={`rounded-xl border p-4 transition-colors ${
+                selected === c._row ? 'border-blue-300 bg-blue-50' : 'border-slate-100 hover:border-slate-200'
+              }`}
+              onClick={() => setSelected(c._row)}
+            >
+              <div className="flex items-start gap-4">
+                {/* PRYPCO name */}
+                <div className="flex-1">
+                  <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">PRYPCO Name</p>
+                  <p className="text-sm font-medium text-slate-900">{c.client_name}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{c.channel} · {fmtAED(c.disbursal)}</p>
+                </div>
+
+                {/* Arrow */}
+                <div className="flex items-center pt-6 text-slate-300 text-lg">→</div>
+
+                {/* Bank name input */}
+                <div className="flex-1">
+                  <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Bank Name</p>
+                  <input
+                    value={bankNames[c._row] || ''}
+                    onChange={e => setBankNames(b => ({ ...b, [c._row]: e.target.value }))}
+                    placeholder="Type name as bank wrote it..."
+                    className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    onClick={e => e.stopPropagation()}
+                  />
+                </div>
+
+                {/* Link button */}
+                <div className="flex items-center pt-5">
+                  <button
+                    disabled={!bankNames[c._row]?.trim() || saving[c._row]}
+                    onClick={e => { e.stopPropagation(); linkCase(c._row, c.client_name) }}
+                    className="px-3 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-40 whitespace-nowrap"
+                  >
+                    {saving[c._row] ? '...' : 'Link ✓'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer tip */}
+        <div className="px-6 py-3 border-t border-slate-100 flex-shrink-0">
+          <p className="text-xs text-slate-400">
+            💡 Linked names are saved permanently — next time this client appears at {bank}, it will auto-match.
+          </p>
+        </div>
+      </div>
+    </div>
   )
 }
