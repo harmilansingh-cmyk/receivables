@@ -11,7 +11,7 @@ const SHEET_ID = process.env.GOOGLE_SHEET_ID!
 
 function rowToCase(headers: string[], row: string[], rowIndex: number) {
   const get    = (f: string) => { const i = headers.indexOf(f); return i >= 0 ? (row[i] || '') : '' }
-  const getNum = (f: string) => { const i = headers.indexOf(f); return i >= 0 ? (Number(row[i]) || 0) : 0 }
+  const getNum = (f: string) => { const i = headers.indexOf(f); if (i < 0) return 0; const clean = String(row[i] || '').replace(/,/g, '').trim(); return parseFloat(clean) || 0 }
   return {
     invoice_no:            get('invoice_no'),
     client_name:           get('client_name'),
