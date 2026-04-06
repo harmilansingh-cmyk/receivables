@@ -66,7 +66,7 @@ Instructions:
 
     const subject = `Payment Follow-up — PRYPCO Invoices | ${bank} | AED ${totalOS.toLocaleString()}`
     const primaryEmails = bankInfo.ap_email.split(',').map((e: string) => e.trim()).join(',')
-    const mailto = `mailto:${primaryEmails}?${bankInfo.cc_emails ? `cc=${encodeURIComponent(bankInfo.cc_emails)}&` : ''}subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(draft)}`
+    const mailto = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(bankInfo.ap_email)}&cc=${encodeURIComponent(bankInfo.cc_emails || '')}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(draft)}`
     
     return NextResponse.json({
       draft,
