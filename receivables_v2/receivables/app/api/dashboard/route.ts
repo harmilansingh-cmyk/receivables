@@ -8,8 +8,7 @@ export async function GET() {
     const active = invoices.filter(i => i.pipeline_status !== 'Superseded')
     const outstanding = active.filter(i => i.pipeline_status !== 'Paid')
 
-    const totalOS = outstanding.reduce((s, i) => s + i.balance_outstanding, 0)
-
+    const totalOS = outstanding.reduce((s, i) => s + (Number(i.balance_outstanding) || 0), 0)
     const totalPerfected = active
       .filter(i => i.pipeline_status === 'Perfected' || i.pipeline_status === 'Payment Pending')
       .reduce((s, i) => s + i.perfected_amount, 0)
