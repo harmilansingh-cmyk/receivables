@@ -7,11 +7,10 @@ const NAV = [
   { href: '/today',       label: 'Today',           icon: '📋' },
   { href: '/invoices',    label: 'Invoices',         icon: '🧾' },
   { href: '/positions',   label: 'Position Board',   icon: '📊' },
-  { href: '/recon',       label: 'Reconciliation',   icon: '🔍' },
   { href: '/collections', label: 'Collections',      icon: '📈' },
   { href: '/chase',       label: 'Chase Drafter',    icon: '✉️'  },
   { href: '/settings',    label: 'Banks & Settings', icon: '⚙️'  },
-  { href: '/monthclose', label: 'Month Close', icon: '📅' },
+  { href: '/monthclose', label: 'Month Close & Recon', icon: '📅' },
 ]
 
 export function Sidebar() {
