@@ -1,219 +1,344 @@
 'use client'
 
 import { useEffect, useState, Suspense } from 'react'
-import { fmtAED, StatusBadge } from '@/components/ui'
+import { fmtAED } from '@/components/ui'
 import { useSearchParams } from 'next/navigation'
 
-interface CaseSummary {
-  invoice_no: string
-  bank: string
-  month: string
-  total: number
-  confirmed: number
-  tdPending: number
-  disputed: number
+interface PrypcoCase {
+  _row: number; case_id: string; client_name: string; bank: string; month: string
+  channel: string; finance_channel: string; disbursal_amount: number
+  commission_amount: number; match_id: string; match_status: string; invoice_no: string
 }
+interface BankCase {
+  _row: number; bank_case_id: string; client_name_bank: string; bank: string; month: string
+  disbursal_amount: number; bank_ref: string; philosophy: string
+  payment_status: string; match_id: string; match_status: string; email_source: string
+}
+interface CaseMatch {
+  _row: number; match_id: string; case_id: string; bank_case_id: string
+  confidence: number; match_type: string; status: string
+  name_score: number; amount_diff_pct: number
+}
+interface Summary {
+  total_prypco: number; total_bank: number; confirmed: number
+  pending_review: number; unmatched_p: number; unmatched_b: number
+}
+type Tab = 'review' | 'confirmed' | 'unmatched_p' | 'unmatched_b'
 
-interface Case {
-  invoice_no: string
-  client_name: string
-  bank: string
-  month: string
-  bank_ref: string
-  disbursal_amount: number
-  bank_confirmed_yn: string
-  rejection_reason: string
-  td_status: string
-  _row: number
-}
+const BANKS = ['ADIB','DIB','MASHREQ','ENBD','CBD','FAB','NBF','SCB','HSBC','RAK','UAB','AL_HILAL','AJMAN','ARAB','BOB','SIB','EIB','ADCB']
 
 function ReconInner() {
   const params = useSearchParams()
-  const [summaries, setSummaries] = useState<CaseSummary[]>([])
-  const [selectedInvoice, setSelectedInvoice] = useState<string | null>(params.get('invoice_no'))
-  const [cases, setCases] = useState<Case[]>([])
-  const [loading, setLoading] = useState(true)
-  const [casesLoading, setCasesLoading] = useState(false)
+  const [bank,  setBank]  = useState(params.get('bank')  || '')
+  const [month, setMonth] = useState(params.get('month') || '2026-03')
+  const [prypco,    setPrypco]    = useState<PrypcoCase[]>([])
+  const [bankCases, setBankCases] = useState<BankCase[]>([])
+  const [matches,   setMatches]   = useState<CaseMatch[]>([])
+  const [summary,   setSummary]   = useState<Summary | null>(null)
+  const [loading,   setLoading]   = useState(false)
+  const [tab,       setTab]       = useState<Tab>('review')
+  const [selectedP, setSelectedP] = useState<string | null>(null)
+  const [selectedB, setSelectedB] = useState<string | null>(null)
+  const [linking,   setLinking]   = useState(false)
 
-  useEffect(() => {
-    // Load all cases grouped by invoice
-    fetch('/api/cases')
-      .then(r => r.json())
-      .then(data => {
-        // Group into summaries
-        const grouped: Record<string, CaseSummary> = {}
-        ;(data.cases || []).forEach((c: Case) => {
-          if (!grouped[c.invoice_no]) {
-            grouped[c.invoice_no] = {
-              invoice_no: c.invoice_no,
-              bank: c.bank,
-              month: c.month,
-              total: 0, confirmed: 0, tdPending: 0, disputed: 0,
-            }
-          }
-          grouped[c.invoice_no].total++
-          if (c.bank_confirmed_yn === 'Y') grouped[c.invoice_no].confirmed++
-          if (c.bank_confirmed_yn === 'N') grouped[c.invoice_no].disputed++
-          if (c.td_status?.toLowerCase().includes('pending')) grouped[c.invoice_no].tdPending++
-        })
-        setSummaries(Object.values(grouped).sort((a, b) => b.total - a.total))
-        setLoading(false)
-      })
-  }, [])
-
-  useEffect(() => {
-    if (!selectedInvoice) return
-    setCasesLoading(true)
-    fetch(`/api/cases?invoice_no=${selectedInvoice}`)
-      .then(r => r.json())
-      .then(data => {
-        setCases(data.cases || [])
-        setCasesLoading(false)
-      })
-  }, [selectedInvoice])
-
-  const updateCase = async (c: Case, field: string, value: string) => {
-    await fetch('/api/cases', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ _row: c._row, [field]: value }),
-    })
-    setCases(prev => prev.map(x => x._row === c._row ? { ...x, [field]: value } : x))
+  const load = async () => {
+    if (!bank || !month) return
+    setLoading(true)
+    const res = await fetch(`/api/recon?bank=${bank}&month=${month}`).then(r => r.json())
+    setPrypco(   (res.prypco    || []).map((r: Record<string,unknown>) => ({ ...r, disbursal_amount: Number(r.disbursal_amount)||0 })))
+    setBankCases((res.bankCases || []).map((r: Record<string,unknown>) => ({ ...r, disbursal_amount: Number(r.disbursal_amount)||0 })))
+    setMatches(res.matches || [])
+    setSummary(res.summary || null)
+    setLoading(false); setSelectedP(null); setSelectedB(null)
   }
 
+  useEffect(() => { load() }, [bank, month])
+
+  const confirmMatch = async (matchId: string) => {
+    await fetch('/api/recon', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'confirm', match_id: matchId }) })
+    setMatches(prev => prev.map(m => m.match_id===matchId ? {...m, status:'CONFIRMED'} : m))
+    setSummary(s => s ? {...s, confirmed:s.confirmed+1, pending_review:s.pending_review-1} : s)
+  }
+
+  const rejectMatch = async (matchId: string) => {
+    await fetch('/api/recon', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'reject', match_id: matchId }) })
+    const match = matches.find(m => m.match_id===matchId)
+    if (match) {
+      setPrypco(prev => prev.map(p => p.case_id===match.case_id ? {...p, match_id:'', match_status:'UNMATCHED'} : p))
+      setBankCases(prev => prev.map(b => b.bank_case_id===match.bank_case_id ? {...b, match_id:'', match_status:'UNMATCHED'} : b))
+    }
+    setMatches(prev => prev.filter(m => m.match_id!==matchId))
+    setSummary(s => s ? {...s, pending_review:s.pending_review-1, unmatched_p:s.unmatched_p+1, unmatched_b:s.unmatched_b+1} : s)
+  }
+
+  const manualLink = async () => {
+    if (!selectedP || !selectedB) return
+    setLinking(true)
+    const res = await fetch('/api/recon', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'manual_match', case_id:selectedP, bank_case_id:selectedB }) })
+      .then(r => r.json())
+    if (res.ok) {
+      setPrypco(prev    => prev.map(p => p.case_id===selectedP     ? {...p, match_id:res.match_id, match_status:'MANUAL_MATCH'} : p))
+      setBankCases(prev => prev.map(b => b.bank_case_id===selectedB ? {...b, match_id:res.match_id, match_status:'MANUAL_MATCH'} : b))
+      setSummary(s => s ? {...s, confirmed:s.confirmed+1, unmatched_p:s.unmatched_p-1, unmatched_b:s.unmatched_b-1} : s)
+      setSelectedP(null); setSelectedB(null)
+    }
+    setLinking(false)
+  }
+
+  const pendingMatches   = matches.filter(m => m.status==='PENDING_REVIEW')
+  const confirmedMatches = matches.filter(m => m.status==='CONFIRMED' || m.match_type==='MANUAL')
+  const unmatchedP = prypco.filter(p    => !p.match_id || p.match_status==='UNMATCHED')
+  const unmatchedB = bankCases.filter(b => !b.match_id || b.match_status==='UNMATCHED')
+  const prypcoById = Object.fromEntries(prypco.map(p    => [p.case_id,     p]))
+  const bankById   = Object.fromEntries(bankCases.map(b => [b.bank_case_id, b]))
+
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Left panel — invoice list */}
-      <div className="w-80 border-r border-slate-200 bg-white flex flex-col">
-        <div className="px-4 py-4 border-b border-slate-100">
-          <h1 className="font-bold text-slate-900">Reconciliation</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Case-level match status per invoice</p>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {loading ? (
-            <div className="p-4 text-sm text-slate-400 animate-pulse">Loading...</div>
-          ) : summaries.length === 0 ? (
-            <div className="p-4 text-sm text-slate-400">
-              No case data yet. Run the email parser in Apps Script to populate.
-            </div>
-          ) : (
-            summaries.map(s => (
-              <button
-                key={s.invoice_no}
-                onClick={() => setSelectedInvoice(s.invoice_no)}
-                className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition-colors ${
-                  selectedInvoice === s.invoice_no ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-mono text-sm font-medium text-slate-900">{s.invoice_no}</span>
-                  <ReconPill confirmed={s.confirmed} total={s.total} />
-                </div>
-                <div className="text-xs text-slate-500">{s.bank} · {s.month}</div>
-                <div className="flex gap-2 mt-1">
-                  {s.tdPending > 0 && (
-                    <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full">
-                      {s.tdPending} TD pending
-                    </span>
-                  )}
-                  {s.disputed > 0 && (
-                    <span className="text-xs px-1.5 py-0.5 bg-red-100 text-red-700 rounded-full">
-                      {s.disputed} disputed
-                    </span>
-                  )}
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Right panel — case detail */}
-      <div className="flex-1 overflow-y-auto bg-slate-50">
-        {!selectedInvoice ? (
-          <div className="flex items-center justify-center h-full text-slate-400 text-sm">
-            Select an invoice to see case detail
+    <div className="flex h-screen overflow-hidden bg-slate-50">
+      {/* Left sidebar */}
+      <div className="w-72 border-r border-slate-200 bg-white flex flex-col flex-shrink-0">
+        <div className="px-4 py-4 border-b border-slate-100 space-y-3">
+          <div>
+            <h1 className="font-bold text-slate-900">Reconciliation</h1>
+            <p className="text-xs text-slate-500 mt-0.5">Match PRYPCO vs bank confirmations</p>
           </div>
-        ) : casesLoading ? (
-          <div className="p-6 animate-pulse text-slate-400 text-sm">Loading cases...</div>
-        ) : (
-          <div className="p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-bold text-slate-900 text-lg">{selectedInvoice}</h2>
-                <p className="text-sm text-slate-500">
-                  {cases[0]?.bank} · {cases[0]?.month} · {cases.length} cases
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <div className="text-right">
-                  <p className="text-2xl font-bold text-slate-900">
-                    {cases.filter(c => c.bank_confirmed_yn === 'Y').length}/{cases.length}
-                  </p>
-                  <p className="text-xs text-slate-500">Confirmed by bank</p>
-                </div>
-              </div>
-            </div>
+          <select value={bank} onChange={e => setBank(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none">
+            <option value="">Select bank...</option>
+            {BANKS.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <input type="month" value={month} onChange={e => setMonth(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none" />
+          <button onClick={load} disabled={!bank||loading}
+            className="w-full py-2 text-sm font-medium bg-slate-900 text-white rounded-xl hover:bg-slate-700 disabled:opacity-40">
+            {loading ? 'Loading...' : 'Load'}
+          </button>
+        </div>
 
-            {/* Cases table */}
-            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr className="text-left text-xs text-slate-500 uppercase tracking-wide">
-                    <th className="px-4 py-3 font-medium">Client Name</th>
-                    <th className="px-4 py-3 font-medium">Bank Ref</th>
-                    <th className="px-4 py-3 font-medium text-right">Amount</th>
-                    <th className="px-4 py-3 font-medium">Bank Confirmed</th>
-                    <th className="px-4 py-3 font-medium">TD Status</th>
-                    <th className="px-4 py-3 font-medium">Rejection</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {cases.map(c => (
-                    <tr key={c._row} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 font-medium text-slate-900">{c.client_name}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-500">{c.bank_ref || '—'}</td>
-                      <td className="px-4 py-3 text-right">
-                        {c.disbursal_amount ? fmtAED(c.disbursal_amount) : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <select
-                          value={c.bank_confirmed_yn || ''}
-                          onChange={e => updateCase(c, 'bank_confirmed_yn', e.target.value)}
-                          className={`text-xs rounded-full px-2 py-0.5 border-0 font-medium cursor-pointer ${
-                            c.bank_confirmed_yn === 'Y' ? 'bg-emerald-100 text-emerald-700' :
-                            c.bank_confirmed_yn === 'N' ? 'bg-red-100 text-red-700' :
-                            'bg-slate-100 text-slate-500'
-                          }`}
-                        >
-                          <option value="">Unknown</option>
-                          <option value="Y">✓ Confirmed</option>
-                          <option value="N">✗ Not confirmed</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3">
-                        <TDStatusPill status={c.td_status} />
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-500">
-                        {c.rejection_reason || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {cases.length === 0 && (
-                <div className="p-8 text-center text-slate-400 text-sm">
-                  No cases found for this invoice. Run the email parser to populate.
-                </div>
-              )}
+        {summary && (
+          <div className="px-4 py-4 space-y-2.5 border-b border-slate-100">
+            {[
+              {label:'PRYPCO cases',  val:summary.total_prypco, c:'slate'},
+              {label:'Bank cases',    val:summary.total_bank,   c:'slate'},
+              {label:'Confirmed',     val:summary.confirmed,    c:'emerald'},
+              {label:'Pending review',val:summary.pending_review,c:'amber'},
+              {label:'PRYPCO only',   val:summary.unmatched_p,  c:'red'},
+              {label:'Bank only',     val:summary.unmatched_b,  c:'purple'},
+            ].map(({label,val,c}) => (
+              <div key={label} className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">{label}</span>
+                <span className={`text-sm font-bold ${
+                  c==='emerald'?'text-emerald-600':c==='amber'?'text-amber-600':
+                  c==='red'?'text-red-600':c==='purple'?'text-purple-600':'text-slate-900'}`}>{val}</span>
+              </div>
+            ))}
+            <div className="pt-1">
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 rounded-full transition-all"
+                  style={{width:`${summary.total_prypco>0?Math.round((summary.confirmed/summary.total_prypco)*100):0}%`}} />
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                {summary.total_prypco>0?Math.round((summary.confirmed/summary.total_prypco)*100):0}% matched
+              </p>
             </div>
-
-            {/* Perfected button */}
-            {cases.length > 0 && (
-              <MarkPerfectedSection cases={cases} invoiceNo={selectedInvoice} />
-            )}
           </div>
         )}
+
+        {selectedP && selectedB && (
+          <div className="px-4 py-4">
+            <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 space-y-2">
+              <p className="text-xs font-medium text-blue-700">Ready to link</p>
+              <p className="text-xs text-blue-600 truncate">📋 {prypcoById[selectedP]?.client_name}</p>
+              <p className="text-xs text-blue-600 truncate">🏦 {bankById[selectedB]?.client_name_bank}</p>
+              <button onClick={manualLink} disabled={linking}
+                className="w-full py-1.5 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40">
+                {linking ? 'Linking...' : '✓ Confirm Link'}
+              </button>
+              <button onClick={() => {setSelectedP(null); setSelectedB(null)}}
+                className="w-full py-1 text-xs text-slate-400 hover:text-slate-600">Clear</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Main */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex border-b border-slate-200 bg-white px-6 pt-4 gap-1">
+          {([
+            {key:'review',      label:`Pending Review (${pendingMatches.length})`},
+            {key:'confirmed',   label:`Confirmed (${confirmedMatches.length})`},
+            {key:'unmatched_p', label:`PRYPCO Only (${unmatchedP.length})`},
+            {key:'unmatched_b', label:`Bank Only (${unmatchedB.length})`},
+          ] as {key:Tab;label:string}[]).map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`pb-3 px-4 text-sm font-medium border-b-2 transition-colors ${
+                tab===t.key ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {!bank ? (
+            <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+              Select a bank and month to begin
+            </div>
+          ) : loading ? (
+            <div className="flex items-center justify-center h-full text-slate-400 text-sm animate-pulse">Loading...</div>
+          ) : (
+            <>
+              {/* PENDING REVIEW */}
+              {tab==='review' && (
+                <div className="space-y-3 max-w-4xl">
+                  {pendingMatches.length===0 && (
+                    <div className="text-center py-16 text-slate-400 text-sm">
+                      No matches pending review
+                      <p className="text-xs mt-1 text-slate-300">Run Auto-Match in Apps Script → PRYPCO Recon menu</p>
+                    </div>
+                  )}
+                  {pendingMatches.map(m => {
+                    const p = prypcoById[m.case_id]
+                    const b = bankById[m.bank_case_id]
+                    if (!p||!b) return null
+                    const conf = Number(m.confidence)
+                    const amtDiff = Number(m.amount_diff_pct)
+                    return (
+                      <div key={m.match_id} className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+                        <div className="flex items-center justify-between px-5 py-2.5 bg-amber-50 border-b border-amber-100">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-medium text-amber-700">Auto-matched</span>
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              conf>=85?'bg-emerald-100 text-emerald-700':conf>=70?'bg-amber-100 text-amber-700':'bg-red-100 text-red-700'
+                            }`}>{conf}% confidence</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => confirmMatch(m.match_id)}
+                              className="px-3 py-1 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">✓ Confirm</button>
+                            <button onClick={() => rejectMatch(m.match_id)}
+                              className="px-3 py-1 text-xs font-medium bg-red-100 text-red-600 rounded-lg hover:bg-red-200">✗ Reject</button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 divide-x divide-slate-100">
+                          <div className="p-4">
+                            <p className="text-xs text-slate-400 uppercase tracking-wide mb-1.5">PRYPCO</p>
+                            <p className="font-semibold text-slate-900 text-sm">{p.client_name}</p>
+                            <p className="text-sm font-bold text-slate-700 mt-1">{fmtAED(p.disbursal_amount)}</p>
+                            <p className="text-xs text-slate-400 mt-0.5">{p.channel}</p>
+                          </div>
+                          <div className="p-4">
+                            <p className="text-xs text-slate-400 uppercase tracking-wide mb-1.5">Bank</p>
+                            <p className="font-semibold text-slate-900 text-sm">{b.client_name_bank}</p>
+                            <p className={`text-sm font-bold mt-1 ${amtDiff>2?'text-amber-600':'text-slate-700'}`}>
+                              {fmtAED(b.disbursal_amount)}
+                              {amtDiff>2 && <span className="text-xs font-normal ml-1">({amtDiff.toFixed(1)}% diff)</span>}
+                            </p>
+                            <p className="text-xs text-slate-400 mt-0.5 font-mono">{b.bank_ref||'—'}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* CONFIRMED */}
+              {tab==='confirmed' && (
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden max-w-5xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr className="text-left text-xs text-slate-500 uppercase tracking-wide">
+                        <th className="px-4 py-3">PRYPCO Name</th>
+                        <th className="px-4 py-3">Bank Name</th>
+                        <th className="px-4 py-3 text-right">PRYPCO Amt</th>
+                        <th className="px-4 py-3 text-right">Bank Amt</th>
+                        <th className="px-4 py-3">Bank Ref</th>
+                        <th className="px-4 py-3">How</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {confirmedMatches.map(m => {
+                        const p = prypcoById[m.case_id]
+                        const b = bankById[m.bank_case_id]
+                        if (!p||!b) return null
+                        const diff = p.disbursal_amount&&b.disbursal_amount
+                          ? Math.abs(p.disbursal_amount-b.disbursal_amount)/Math.max(p.disbursal_amount,b.disbursal_amount)*100 : 0
+                        return (
+                          <tr key={m.match_id} className="hover:bg-slate-50">
+                            <td className="px-4 py-2.5 text-xs font-medium text-slate-900 max-w-xs truncate">{p.client_name}</td>
+                            <td className="px-4 py-2.5 text-xs text-slate-600 max-w-xs truncate">{b.client_name_bank}</td>
+                            <td className="px-4 py-2.5 text-xs text-right">{fmtAED(p.disbursal_amount)}</td>
+                            <td className={`px-4 py-2.5 text-xs text-right ${diff>2?'text-amber-600 font-medium':'text-slate-600'}`}>
+                              {fmtAED(b.disbursal_amount)}</td>
+                            <td className="px-4 py-2.5 text-xs font-mono text-slate-400">{b.bank_ref||'—'}</td>
+                            <td className="px-4 py-2.5">
+                              <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                                m.match_type==='MANUAL'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>
+                                {m.match_type==='MANUAL'?'Manual':'Auto'}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  {confirmedMatches.length===0 && (
+                    <div className="py-12 text-center text-slate-400 text-sm">No confirmed matches yet</div>
+                  )}
+                </div>
+              )}
+
+              {/* UNMATCHED PRYPCO */}
+              {tab==='unmatched_p' && (
+                <div className="space-y-3 max-w-2xl">
+                  <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700">
+                    💡 Click a case to select it, then go to <strong>Bank Only</strong> tab and click the matching bank case to link them.
+                  </div>
+                  {unmatchedP.length===0 && <div className="text-center py-12 text-emerald-600 text-sm font-medium">✅ All PRYPCO cases matched!</div>}
+                  {unmatchedP.map(p => (
+                    <button key={p.case_id} onClick={() => setSelectedP(selectedP===p.case_id?null:p.case_id)}
+                      className={`w-full text-left rounded-xl border p-4 transition-all ${
+                        selectedP===p.case_id?'border-blue-400 bg-blue-50 ring-2 ring-blue-300':'border-slate-200 bg-white hover:border-slate-300'}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-sm text-slate-900">{p.client_name}</span>
+                        <span className="text-sm font-bold text-slate-700">{fmtAED(p.disbursal_amount)}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">{p.channel} · {p.finance_channel}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* UNMATCHED BANK */}
+              {tab==='unmatched_b' && (
+                <div className="space-y-3 max-w-2xl">
+                  {selectedP && (
+                    <div className="rounded-xl bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700">
+                      Selected PRYPCO: <strong>{prypcoById[selectedP]?.client_name}</strong> — click a bank case below to link
+                    </div>
+                  )}
+                  {unmatchedB.length===0 && <div className="text-center py-12 text-emerald-600 text-sm font-medium">✅ All bank cases matched!</div>}
+                  {unmatchedB.map(b => (
+                    <button key={b.bank_case_id} onClick={() => setSelectedB(selectedB===b.bank_case_id?null:b.bank_case_id)}
+                      className={`w-full text-left rounded-xl border p-4 transition-all ${
+                        selectedB===b.bank_case_id?'border-blue-400 bg-blue-50 ring-2 ring-blue-300':'border-slate-200 bg-white hover:border-slate-300'}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-sm text-slate-900">{b.client_name_bank}</span>
+                        <span className="text-sm font-bold text-slate-700">{fmtAED(b.disbursal_amount)}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        {b.bank_ref&&<span className="font-mono">{b.bank_ref} · </span>}
+                        {b.philosophy&&<span>{b.philosophy} · </span>}
+                        <span>{b.payment_status}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -224,84 +349,5 @@ export default function ReconPage() {
     <Suspense fallback={<div className="p-6 text-slate-400 animate-pulse">Loading...</div>}>
       <ReconInner />
     </Suspense>
-  )
-}
-
-// ── Sub-components ───────────────────────────────────────────
-
-function ReconPill({ confirmed, total }: { confirmed: number; total: number }) {
-  const pct = total > 0 ? Math.round((confirmed / total) * 100) : 0
-  const cls = pct === 100 ? 'bg-emerald-100 text-emerald-700' :
-              pct >= 50   ? 'bg-amber-100 text-amber-700' :
-                            'bg-red-100 text-red-700'
-  return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cls}`}>
-      {confirmed}/{total}
-    </span>
-  )
-}
-
-function TDStatusPill({ status }: { status: string }) {
-  if (!status) return <span className="text-xs text-slate-300">—</span>
-  const lower = status.toLowerCase()
-  const cls = lower.includes('receiv') || lower.includes('complet') || lower.includes('done')
-    ? 'bg-emerald-100 text-emerald-700'
-    : lower.includes('pending') || lower.includes('wait')
-    ? 'bg-amber-100 text-amber-700'
-    : 'bg-slate-100 text-slate-600'
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>
-      {status}
-    </span>
-  )
-}
-
-function MarkPerfectedSection({ cases, invoiceNo }: { cases: Case[]; invoiceNo: string }) {
-  const confirmed = cases.filter(c => c.bank_confirmed_yn === 'Y').length
-  const tdPending = cases.filter(c => c.td_status?.toLowerCase().includes('pending')).length
-  const total     = cases.length
-  const allClear  = confirmed === total && tdPending === 0
-  const [marking, setMarking] = useState(false)
-  const [done, setDone]       = useState(false)
-
-  const markPerfected = async () => {
-    setMarking(true)
-    await fetch(`/api/invoices/${invoiceNo}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pipeline_status: 'Perfected' }),
-    })
-    setMarking(false)
-    setDone(true)
-  }
-
-  if (done) return (
-    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 font-medium">
-      ✅ Invoice {invoiceNo} marked as Perfected — now appears in Today&apos;s chase list
-    </div>
-  )
-
-  return (
-    <div className={`rounded-2xl border p-4 ${allClear ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
-      <div className="flex items-center justify-between">
-        <div className="text-sm">
-          <p className="font-medium text-slate-900">
-            {allClear ? '✅ All cases clear — ready to mark Perfected' : 'Not ready to mark Perfected'}
-          </p>
-          <p className="text-slate-500 mt-0.5">
-            {confirmed}/{total} confirmed · {tdPending} TD pending
-            {!allClear && tdPending > 0 && ' · TD must be received first'}
-            {!allClear && confirmed < total && ` · ${total - confirmed} cases still unconfirmed`}
-          </p>
-        </div>
-        <button
-          onClick={markPerfected}
-          disabled={!allClear || marking}
-          className="px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {marking ? 'Marking...' : 'Mark Perfected'}
-        </button>
-      </div>
-    </div>
   )
 }
