@@ -162,9 +162,19 @@ function InvoicesInner() {
                     <td className="px-4 py-3">
                       <div>
                         <span className="font-mono font-medium text-slate-900">{inv.invoice_no}</span>
-                        {inv.parent_invoice_no && (
-                          <div className="text-xs text-slate-400">↳ split from {inv.parent_invoice_no}</div>
-                        )}
+                        {inv.parent_invoice_no && (() => {
+                          // Find grandparent — parent's parent_invoice_no
+                          const parent = invoices.find(x => x.invoice_no === inv.parent_invoice_no)
+                          const grandparent = parent?.parent_invoice_no
+                          return (
+                            <div className="text-xs text-slate-400">
+                              {grandparent
+                                ? <>↳ <span className="font-mono">{grandparent}</span> → <span className="font-mono">{inv.parent_invoice_no}</span></>
+                                : <>↳ split from <span className="font-mono">{inv.parent_invoice_no}</span></>
+                              }
+                            </div>
+                          )
+                        })()}
                         {inv.invoice_type !== 'monthly' && (
                           <div className="text-xs text-purple-500 capitalize">
                             {inv.invoice_type.replace('_', ' ')}
@@ -195,14 +205,25 @@ function InvoicesInner() {
                         >
                           Edit
                         </button>
-                        {inv.pipeline_status !== 'Superseded' && inv.pipeline_status !== 'Paid' && (
-                          <button
-                            onClick={() => setSplitTarget(inv)}
-                            className="px-2 py-1 text-xs text-amber-600 hover:bg-amber-50 rounded-lg"
-                          >
-                            Split
-                          </button>
-                        )}
+                        {inv.pipeline_status !== 'Superseded' && inv.pipeline_status !== 'Paid' && (() => {
+                          // Check if this is already a grandchild (parent is itself a child)
+                          const parent = inv.parent_invoice_no
+                            ? invoices.find(x => x.invoice_no === inv.parent_invoice_no)
+                            : null
+                          const isGrandchild = !!parent?.parent_invoice_no
+                          return isGrandchild ? (
+                            <span className="px-2 py-1 text-xs text-slate-300 cursor-not-allowed" title="Max 2 levels of splits">
+                              Max depth
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => setSplitTarget(inv)}
+                              className="px-2 py-1 text-xs text-amber-600 hover:bg-amber-50 rounded-lg"
+                            >
+                              Split
+                            </button>
+                          )
+                        })()}
                       </div>
                     </td>
                   </tr>
@@ -404,9 +425,20 @@ function SplitModal({ invoice, onClose, onSplit, saving }: {
         </p>
       </div>
 
-      <div className="mb-4 p-3 bg-slate-50 rounded-xl text-xs text-slate-600">
-        <span className="font-medium">Original: </span>
-        {invoice.invoice_no} · {invoice.bank} · {invoice.month} · {fmtAED(invoice.confirmed_amount)} · {invoice.total_cases} cases
+      <div className="mb-4 p-3 bg-slate-50 rounded-xl text-xs text-slate-600 space-y-1">
+        <div>
+          <span className="font-medium">Splitting: </span>
+          <span className="font-mono">{invoice.invoice_no}</span>
+          {' · '}{invoice.bank}{' · '}{invoice.month}{' · '}{fmtAED(invoice.confirmed_amount)}
+          {invoice.total_cases ? ` · ${invoice.total_cases} cases` : ''}
+        </div>
+        {invoice.parent_invoice_no && (
+          <div className="text-slate-400">
+            ⚠️ This is already a split child of{' '}
+            <span className="font-mono font-medium">{invoice.parent_invoice_no}</span>
+            {' '}— grandchildren will be created (max 2 levels)
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4">
