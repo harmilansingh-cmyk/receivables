@@ -148,14 +148,17 @@ export async function POST(req: NextRequest) {
 
     function ci(f: string) { return caseHeaders.indexOf(f) }
 
-    // Build existing lookup by bank → [client names]
-    const existingByBank: Record<string, string[]> = {}
+    // Build existing lookup by bank → [{name, amount}]
+    const existingByBank: Record<string, {name: string, amount: number}[]> = {}
     existingRows.forEach(r => {
       const b = String(r[ci('bank')] || '')
       const m = String(r[ci('month')] || '')
       if (m !== month) return
       if (!existingByBank[b]) existingByBank[b] = []
-      existingByBank[b].push(normName(String(r[ci('client_name')] || '')))
+      existingByBank[b].push({
+        name: normName(String(r[ci('client_name')] || '')),
+        amount: Number(String(r[ci('disbursal_amount')] || '0').replace(/,/g,'')) || 0,
+      })
     })
 
     // Process MIS rows
@@ -176,9 +179,17 @@ export async function POST(req: NextRequest) {
       const bank       = normBank(bankRaw)
       const clientNorm = normName(clientName)
 
-      // Check duplicate
+      // Check duplicate: same client + same amount = duplicate
+      // Same client + different amount = different case (e.g. two loans)
+      const disbAmt = colMap.disbAmt >= 0 ? parseFloat(String(row[colMap.disbAmt] || '0').replace(/,/g, '')) || 0 : 0
       const existingForBank = existingByBank[bank] || []
-      const isDup = existingForBank.some(n => fuzzy(n, clientNorm) > 0.82)
+      const isDup = existingForBank.some(e => {
+        const nameMatch = fuzzy(e.name, clientNorm) > 0.82
+        if (!nameMatch) return false
+        // Same name — check if amount also matches (same case)
+        if (e.amount && disbAmt && Math.abs(e.amount - disbAmt) > 1) return false // different amounts = different case
+        return true
+      })
       if (isDup) { skipped++; return }
 
       // Build row
@@ -213,7 +224,7 @@ export async function POST(req: NextRequest) {
 
       // Add to existing lookup to prevent intra-batch duplicates
       if (!existingByBank[bank]) existingByBank[bank] = []
-      existingByBank[bank].push(clientNorm)
+      existingByBank[bank].push({ name: clientNorm, amount: disbAmt })
     })
 
     // Write all rows at once
