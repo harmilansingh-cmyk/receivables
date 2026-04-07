@@ -174,14 +174,12 @@ function MonthCloseInner() {
       {/* Right panel — case detail */}
       <div className="flex-1 overflow-y-auto bg-slate-50">
         {!selectedBank ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center space-y-3">
-              <p className="text-slate-400 text-sm">Select a bank to see case detail</p>
-              <p className="text-slate-300 text-xs">
-                Total {month}: {fmtAED(totalOS)} across {summaries.length} banks
-              </p>
-            </div>
-          </div>
+          <ConsolidatedView
+            month={month}
+            summaries={summaries}
+            onSelectBank={setSelectedBank}
+            loading={loading}
+          />
         ) : casesLoading ? (
           <div className="p-6 text-slate-400 text-sm animate-pulse">Loading cases...</div>
         ) : (
@@ -535,6 +533,195 @@ function ReconStatusBadge({ status }: { status: string }) {
     <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${styles[status] || 'bg-slate-100 text-slate-400'}`}>
       {labels[status] || status || '—'}
     </span>
+  )
+}
+
+// ── Consolidated View ────────────────────────────────────────
+function ConsolidatedView({ month, summaries, onSelectBank, loading }: {
+  month: string
+  summaries: BankSummary[]
+  onSelectBank: (bank: string) => void
+  loading: boolean
+}) {
+  const [expanded, setExpanded] = useState(true)
+
+  const totalCases     = summaries.reduce((s, b) => s + b.total, 0)
+  const totalConfirmed = summaries.reduce((s, b) => s + b.confirmed, 0)
+  const totalAmount    = summaries.reduce((s, b) => s + b.totalAmount, 0)
+  const totalConfAmt   = summaries.reduce((s, b) => s + b.confirmedAmount, 0)
+  const totalAwaiting  = summaries.reduce((s, b) => s + b.prypcoOnly, 0)
+  const totalBankOnly  = summaries.reduce((s, b) => s + b.bankOnly, 0)
+  const pct            = totalCases > 0 ? Math.round((totalConfirmed / totalCases) * 100) : 0
+
+  if (loading) return (
+    <div className="p-6 animate-pulse space-y-4">
+      <div className="h-32 bg-slate-100 rounded-2xl" />
+      <div className="h-64 bg-slate-100 rounded-2xl" />
+    </div>
+  )
+
+  if (summaries.length === 0) return (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-center space-y-2">
+        <p className="text-slate-400 text-sm">No cases for {month} yet.</p>
+        <p className="text-slate-300 text-xs">Import the MIS sheet to get started.</p>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="p-6 space-y-5 max-w-5xl">
+      {/* Month header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">
+            {new Date(month + '-01').toLocaleDateString('en-AE', { month: 'long', year: 'numeric' })}
+          </h2>
+          <p className="text-sm text-slate-500 mt-0.5">Consolidated view · {summaries.length} banks</p>
+        </div>
+        <div className="text-right">
+          <p className="text-3xl font-bold text-slate-900">{fmtAED(totalAmount)}</p>
+          <p className="text-xs text-slate-500 uppercase tracking-wide mt-0.5">Total Disbursed</p>
+        </div>
+      </div>
+
+      {/* Summary strip */}
+      <div className="grid grid-cols-5 gap-3">
+        {[
+          { label: 'Total Cases',     value: String(totalCases),                color: 'slate' },
+          { label: 'Confirmed',       value: String(totalConfirmed),            color: 'emerald' },
+          { label: 'Awaiting Bank',   value: String(totalAwaiting),             color: 'amber' },
+          { label: 'Bank-Only',       value: String(totalBankOnly),             color: 'purple' },
+          { label: 'Confirmed Amt',   value: fmtAED(totalConfAmt),              color: 'blue' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 text-center">
+            <p className={`text-2xl font-bold ${
+              color === 'emerald' ? 'text-emerald-600' :
+              color === 'amber'   ? 'text-amber-600'   :
+              color === 'purple'  ? 'text-purple-600'  :
+              color === 'blue'    ? 'text-blue-600'     :
+              'text-slate-900'
+            }`}>{value}</p>
+            <p className="text-xs text-slate-500 mt-1">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress bar */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex justify-between text-sm mb-2">
+          <span className="text-slate-600 font-medium">Overall reconciliation progress</span>
+          <span className="font-bold text-slate-900">{pct}% confirmed</span>
+        </div>
+        <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-emerald-500 rounded-full transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-xs text-slate-400 mt-1.5">
+          <span>{totalConfirmed} confirmed</span>
+          <span>{totalAwaiting} awaiting bank</span>
+          <span>{totalBankOnly} bank-only</span>
+        </div>
+      </div>
+
+      {/* Bank breakdown table */}
+      <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+        <div
+          className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 cursor-pointer hover:bg-slate-50"
+          onClick={() => setExpanded(e => !e)}
+        >
+          <h3 className="font-semibold text-slate-900">Bank Breakdown</h3>
+          <span className="text-slate-400 text-sm">{expanded ? '▲ Collapse' : '▼ Expand'}</span>
+        </div>
+
+        {expanded && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr className="text-left text-xs text-slate-500 uppercase tracking-wide">
+                  <th className="px-5 py-3 font-medium">Bank</th>
+                  <th className="px-5 py-3 font-medium text-right">Cases</th>
+                  <th className="px-5 py-3 font-medium text-right">Total Amt</th>
+                  <th className="px-5 py-3 font-medium text-right">Confirmed</th>
+                  <th className="px-5 py-3 font-medium text-right">Conf. Amt</th>
+                  <th className="px-5 py-3 font-medium">Progress</th>
+                  <th className="px-5 py-3 font-medium">Status</th>
+                  <th className="px-5 py-3 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {summaries
+                  .sort((a, b) => b.totalAmount - a.totalAmount)
+                  .map(b => {
+                    const bPct = b.total > 0 ? Math.round((b.confirmed / b.total) * 100) : 0
+                    return (
+                      <tr key={b.bank} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-5 py-3 font-bold text-slate-900">{b.bank}</td>
+                        <td className="px-5 py-3 text-right text-slate-600">{b.total}</td>
+                        <td className="px-5 py-3 text-right font-medium">{fmtAED(b.totalAmount)}</td>
+                        <td className="px-5 py-3 text-right">
+                          <span className={b.confirmed > 0 ? 'text-emerald-600 font-medium' : 'text-slate-400'}>
+                            {b.confirmed}
+                          </span>
+                          <span className="text-slate-400"> / {b.total}</span>
+                        </td>
+                        <td className="px-5 py-3 text-right text-slate-600">
+                          {b.confirmedAmount > 0 ? fmtAED(b.confirmedAmount) : '—'}
+                        </td>
+                        <td className="px-5 py-3 w-32">
+                          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 rounded-full"
+                              style={{ width: `${bPct}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-slate-400 mt-0.5 block">{bPct}%</span>
+                        </td>
+                        <td className="px-5 py-3">
+                          {b.readyToInvoice && b.confirmed === b.total ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">Ready</span>
+                          ) : b.confirmed > 0 ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Partial</span>
+                          ) : (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">Pending</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          <button
+                            onClick={() => onSelectBank(b.bank)}
+                            className="text-xs text-blue-600 hover:underline font-medium"
+                          >
+                            View →
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+              </tbody>
+              {/* Totals row */}
+              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                <tr>
+                  <td className="px-5 py-3 font-bold text-slate-900">Total</td>
+                  <td className="px-5 py-3 text-right font-bold text-slate-900">{totalCases}</td>
+                  <td className="px-5 py-3 text-right font-bold text-slate-900">{fmtAED(totalAmount)}</td>
+                  <td className="px-5 py-3 text-right font-bold text-emerald-600">{totalConfirmed} / {totalCases}</td>
+                  <td className="px-5 py-3 text-right font-bold text-slate-900">{fmtAED(totalConfAmt)}</td>
+                  <td className="px-5 py-3">
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-xs text-slate-500 font-medium">{pct}%</span>
+                  </td>
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
