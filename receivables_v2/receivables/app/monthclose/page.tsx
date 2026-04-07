@@ -53,6 +53,8 @@ function MonthCloseInner() {
   const [sheetId, setSheetId] = useState('')
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<string | null>(null)
+  const [parsing, setParsing] = useState(false)
+  const [parseResult, setParseResult] = useState<string | null>(null)
 
   const loadMonth = async (m: string) => {
     setLoading(true)
@@ -100,6 +102,36 @@ function MonthCloseInner() {
           >
             + Import MIS Sheet
           </button>
+          {/* Parse bank emails button */}
+          <button
+            onClick={async () => {
+              setParsing(true)
+              setParseResult(null)
+              const res = await fetch('/api/parseemails', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ month }),
+              }).then(r => r.json())
+              setParsing(false)
+              if (res.manual) {
+                setParseResult('⚠️ Run parseEmailsForMonth("' + month + '") in Apps Script, then refresh.')
+              } else if (res.ok) {
+                setParseResult('✅ ' + res.emails_processed + ' emails parsed · ' + res.cases_found + ' cases found')
+                loadMonth(month)
+              } else {
+                setParseResult('❌ ' + (res.error || 'Error'))
+              }
+            }}
+            disabled={parsing}
+            className="w-full py-2 text-sm font-medium bg-blue-700 text-white rounded-xl hover:bg-blue-800 disabled:opacity-50"
+          >
+            {parsing ? 'Parsing emails...' : '📧 Parse Bank Emails'}
+          </button>
+          {parseResult && (
+            <div className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2 leading-relaxed">
+              {parseResult}
+            </div>
+          )}
         </div>
 
         {/* Summary strip */}
